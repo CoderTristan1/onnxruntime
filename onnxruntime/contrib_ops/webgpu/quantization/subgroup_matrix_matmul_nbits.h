@@ -21,15 +21,19 @@ using namespace onnxruntime::webgpu;
 
 class SubgroupMatrixMatMulNBitsProgram final : public Program<SubgroupMatrixMatMulNBitsProgram> {
  public:
-  SubgroupMatrixMatMulNBitsProgram(uint32_t nbits, int32_t config_index, const wgpu::StringView& vendor, bool has_zero_points, bool has_bias, bool has_weight_idx, bool has_weight_idx_indirect)
+  SubgroupMatrixMatMulNBitsProgram(uint32_t nbits, uint32_t sg_mat_m, uint32_t sg_mat_n, uint32_t sg_mat_k,
+                                   bool has_zero_points, bool has_bias, bool has_weight_idx,
+                                   bool has_weight_idx_indirect, bool use_intel_shader)
       : Program{"SubgroupMatrixMatMulNBits"},
         nbits_(nbits),
-        config_index_(config_index),
-        vendor_(vendor),
+        sg_mat_m_(sg_mat_m),
+        sg_mat_n_(sg_mat_n),
+        sg_mat_k_(sg_mat_k),
         has_zero_points_(has_zero_points),
         has_bias_(has_bias),
         has_weight_idx_{has_weight_idx},
-        has_weight_idx_indirect_{has_weight_idx_indirect} {};
+        has_weight_idx_indirect_{has_weight_idx_indirect},
+        use_intel_shader_(use_intel_shader) {};
   Status GenerateShaderCode(ShaderHelper& sh) const override;
   WEBGPU_PROGRAM_DEFINE_UNIFORM_VARIABLES(
       {"M", ProgramUniformVariableDataType::Uint32},
@@ -40,12 +44,14 @@ class SubgroupMatrixMatMulNBitsProgram final : public Program<SubgroupMatrixMatM
 
  private:
   uint32_t nbits_;
-  int32_t config_index_;
-  std::string vendor_;
+  uint32_t sg_mat_m_;
+  uint32_t sg_mat_n_;
+  uint32_t sg_mat_k_;
   bool has_zero_points_;
   bool has_bias_;
   bool has_weight_idx_;
   bool has_weight_idx_indirect_;
+  bool use_intel_shader_;
 };
 
 Status ApplySubgroupMatrixMatMulNBits(const Tensor* a, const Tensor* b, const Tensor* scales,
@@ -65,6 +71,7 @@ bool CanApplySubgroupMatrixMatMulNBits(onnxruntime::webgpu::ComputeContext& cont
                                        uint64_t accuracy_level,
                                        uint32_t block_size,
                                        uint32_t batch_count,
+                                       uint32_t M,
                                        uint32_t N,
                                        uint32_t K,
                                        uint32_t nbits,

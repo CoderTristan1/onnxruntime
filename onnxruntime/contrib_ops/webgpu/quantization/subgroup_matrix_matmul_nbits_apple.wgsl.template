@@ -9,6 +9,9 @@
 #param has_bias
 #param has_weight_idx
 #param has_weight_idx_indirect
+#param sg_mat_k
+#param sg_mat_m
+#param sg_mat_n
 
 #use .getByOffset .setByOffset
 
@@ -20,6 +23,9 @@ const tile_k = 32;
 const subtile_cols = 32;
 const subtile_rows = 16;
 const quantization_block_size = 32;
+const kSgMatM: u32 = u32(sg_mat_m);
+const kSgMatN: u32 = u32(sg_mat_n);
+const kSgMatK: u32 = u32(sg_mat_k);
 alias compute_precision = output_element_t;
 
 var<workgroup> tile_A: array<compute_precision, tile_rows * tile_k>;       // 32 x 32 - RxC

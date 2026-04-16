@@ -55,7 +55,6 @@ static const std::tuple<std::string_view, wgpu::BackendType, wgpu::SubgroupMatri
 bool IsSubgroupMatrixConfigSupportedOnIntel(onnxruntime::webgpu::ComputeContext& context, int32_t& config_index) {
   const wgpu::AdapterInfo& adapter_info = context.AdapterInfo();
   const wgpu::AdapterPropertiesSubgroupMatrixConfigs& subgroup_matrix_configs = context.SubgroupMatrixConfigs();
-  int32_t index = 0;
   for (auto& supported_config : intel_supported_subgroup_matrix_configs) {
     for (size_t i = 0; i < subgroup_matrix_configs.configCount; i++) {
       auto& subgroup_matrix_config = subgroup_matrix_configs.configs[i];
@@ -64,11 +63,10 @@ bool IsSubgroupMatrixConfigSupportedOnIntel(onnxruntime::webgpu::ComputeContext&
                                       subgroup_matrix_config.M, subgroup_matrix_config.N, subgroup_matrix_config.K,
                                       adapter_info.subgroupMinSize, adapter_info.subgroupMaxSize);
       if (config == supported_config) {
-        config_index = index;
+        config_index = static_cast<int32_t>(i);
         return true;
       }
     }
-    index++;
   }
   return false;
 }
@@ -121,8 +119,8 @@ Status GenerateShaderCodeOnIntel(ShaderHelper& shader,
                                  const ShaderVariableHelper& b,
                                  const ShaderVariableHelper& scales_b,
                                  const ShaderVariableHelper& output,
-                                 uint32_t nbits, int32_t config_index, bool has_zero_points, bool has_bias, bool has_weight_idx, bool has_weight_idx_indirect) {
-  auto& config = intel_supported_subgroup_matrix_configs[config_index];
+                                 uint32_t nbits, uint32_t sg_mat_m, uint32_t sg_mat_n, uint32_t sg_mat_k,
+                                 bool has_zero_points, bool has_bias, bool has_weight_idx, bool has_weight_idx_indirect) {
   return WGSL_TEMPLATE_APPLY(shader, "quantization/subgroup_matrix_matmul_nbits_intel.wgsl.template",
                              WGSL_TEMPLATE_PARAMETER(has_bias, has_bias),
                              WGSL_TEMPLATE_PARAMETER(has_weight_idx, has_weight_idx),
@@ -130,9 +128,9 @@ Status GenerateShaderCodeOnIntel(ShaderHelper& shader,
                              WGSL_TEMPLATE_PARAMETER(has_zero_points, has_zero_points),
                              WGSL_TEMPLATE_PARAMETER(n_bits, nbits),
                              WGSL_TEMPLATE_PARAMETER(output_type_i32, false),
-                             WGSL_TEMPLATE_PARAMETER(sg_mat_k, std::get<6>(config)),
-                             WGSL_TEMPLATE_PARAMETER(sg_mat_m, std::get<4>(config)),
-                             WGSL_TEMPLATE_PARAMETER(sg_mat_n, std::get<5>(config)),
+                             WGSL_TEMPLATE_PARAMETER(sg_mat_k, sg_mat_k),
+                             WGSL_TEMPLATE_PARAMETER(sg_mat_m, sg_mat_m),
+                             WGSL_TEMPLATE_PARAMETER(sg_mat_n, sg_mat_n),
                              WGSL_TEMPLATE_VARIABLE(input_b, b),
                              WGSL_TEMPLATE_VARIABLE(output, output),
                              WGSL_TEMPLATE_VARIABLE(scales_b, scales_b));
@@ -140,7 +138,9 @@ Status GenerateShaderCodeOnIntel(ShaderHelper& shader,
 
 Status GenerateShaderCodeOnApple(ShaderHelper& shader, const ShaderVariableHelper& a, const ShaderVariableHelper& b,
                                  const ShaderVariableHelper& scales_b,
-                                 const ShaderVariableHelper& output, uint32_t nbits, bool has_zero_points, bool has_bias, bool has_weight_idx, bool has_weight_idx_indirect) {
+                                 const ShaderVariableHelper& output, uint32_t nbits,
+                                 uint32_t sg_mat_m, uint32_t sg_mat_n, uint32_t sg_mat_k,
+                                 bool has_zero_points, bool has_bias, bool has_weight_idx, bool has_weight_idx_indirect) {
   return WGSL_TEMPLATE_APPLY(shader, "quantization/subgroup_matrix_matmul_nbits_apple.wgsl.template",
                              WGSL_TEMPLATE_PARAMETER(has_bias, has_bias),
                              WGSL_TEMPLATE_PARAMETER(has_weight_idx, has_weight_idx),
@@ -148,6 +148,9 @@ Status GenerateShaderCodeOnApple(ShaderHelper& shader, const ShaderVariableHelpe
                              WGSL_TEMPLATE_PARAMETER(has_zero_points, has_zero_points),
                              WGSL_TEMPLATE_PARAMETER(n_bits, nbits),
                              WGSL_TEMPLATE_PARAMETER(output_type_i32, false),
+                             WGSL_TEMPLATE_PARAMETER(sg_mat_k, sg_mat_k),
+                             WGSL_TEMPLATE_PARAMETER(sg_mat_m, sg_mat_m),
+                             WGSL_TEMPLATE_PARAMETER(sg_mat_n, sg_mat_n),
                              WGSL_TEMPLATE_VARIABLE(a, a),
                              WGSL_TEMPLATE_VARIABLE(b, b),
                              WGSL_TEMPLATE_VARIABLE(output, output),
@@ -169,13 +172,10 @@ Status SubgroupMatrixMatMulNBitsProgram::GenerateShaderCode(ShaderHelper& shader
   }
   const auto& output = shader.AddOutput("output", ShaderUsage::UseUniform | ShaderUsage::UseElementTypeAlias);
 
-  if (!vendor_.compare("apple")) {
-    return GenerateShaderCodeOnApple(shader, a, b, scales_b, output, nbits_, has_zero_points_, has_bias_, has_weight_idx_, has_weight_idx_indirect_);
-  } else if (!vendor_.compare("intel")) {
-    return GenerateShaderCodeOnIntel(shader, b, scales_b, output, nbits_, config_index_, has_zero_points_, has_bias_, has_weight_idx_, has_weight_idx_indirect_);
+  if (use_intel_shader_) {
+    return GenerateShaderCodeOnIntel(shader, b, scales_b, output, nbits_, sg_mat_m_, sg_mat_n_, sg_mat_k_, has_zero_points_, has_bias_, has_weight_idx_, has_weight_idx_indirect_);
   } else {
-    return Status(onnxruntime::common::ONNXRUNTIME, onnxruntime::common::NOT_IMPLEMENTED,
-                  "onnxruntime does not support subgroup matrix on this vendor.");
+    return GenerateShaderCodeOnApple(shader, a, b, scales_b, output, nbits_, sg_mat_m_, sg_mat_n_, sg_mat_k_, has_zero_points_, has_bias_, has_weight_idx_, has_weight_idx_indirect_);
   }
 }
 
@@ -191,30 +191,33 @@ Status ApplySubgroupMatrixMatMulNBits(const Tensor* a, const Tensor* b, const Te
                                       Tensor* y,
                                       const uint32_t weight_index,
                                       const Tensor* weight_index_indirect) {
+  const auto& sgmm_config = context.SubgroupMatrixConfigs().configs[config_index];
+  const auto sg_mat_m = sgmm_config.M;
+  const auto sg_mat_n = sgmm_config.N;
+  const auto sg_mat_k = sgmm_config.K;
+
+  bool use_intel_shader = context.AdapterInfo().vendor == std::string_view{"intel"} || context.AdapterInfo().vendor == std::string_view{"nvidia"};
+
   // If applicable, layout optimization of input matrix A(MxK) can be used for SubgroupMatrixLoad.
   Tensor a_prepack;
-  if (context.AdapterInfo().vendor == std::string_view{"intel"}) {
-    const auto& config = intel_supported_subgroup_matrix_configs[config_index];
-    const auto m = std::get<4>(config);
-    const auto k = std::get<6>(config);
-
+  if (use_intel_shader) {
     // Optimize the layout of input matrix A(MxK) for SubgroupMatrixLoad.
-    PrepackProgram prepack_program{m, k};
+    PrepackProgram prepack_program{sg_mat_m, sg_mat_k};
     constexpr uint32_t kSubgroupSize = 32;
     prepack_program.SetWorkgroupSize(kSubgroupSize);
 
-    const auto dispatch_group_size_x = (M + m - 1) / m;
-    ORT_ENFORCE(K % k == 0, "K must be a multiple of ", k);
-    const auto dispatch_group_size_y = K / k;
-    // Each workgroup will process one subgroup matrix of size m x k.
+    const auto dispatch_group_size_x = (M + sg_mat_m - 1) / sg_mat_m;
+    ORT_ENFORCE(K % sg_mat_k == 0, "K must be a multiple of ", sg_mat_k);
+    const auto dispatch_group_size_y = K / sg_mat_k;
+    // Each workgroup will process one subgroup matrix of size sg_mat_m x sg_mat_k.
     prepack_program.SetDispatchGroupSize(dispatch_group_size_x, dispatch_group_size_y, 1);
 
-    TensorShape a_prepack_shape{dispatch_group_size_x * m, K};
+    TensorShape a_prepack_shape{dispatch_group_size_x * sg_mat_m, K};
     a_prepack = context.CreateGPUTensor(a->DataType(), a_prepack_shape);
     prepack_program.AddInputs({{a, ProgramTensorMetadataDependency::TypeAndRank, 1}})
         .AddOutputs({{&a_prepack, ProgramTensorMetadataDependency::Rank, a_prepack.Shape(), 1}})
         .AddUniformVariables({{M}, {K}})
-        .CacheHint(m, k);
+        .CacheHint(sg_mat_m, sg_mat_k);
     ORT_RETURN_IF_ERROR(context.RunProgram(prepack_program));
     a = &a_prepack;
   }
@@ -228,8 +231,8 @@ Status ApplySubgroupMatrixMatMulNBits(const Tensor* a, const Tensor* b, const Te
   const bool has_bias = bias != nullptr;
   const bool has_weight_idx_indirect = weight_index_indirect != nullptr;
   const bool has_weight_idx = weight_index > 0 || has_weight_idx_indirect;
-  SubgroupMatrixMatMulNBitsProgram mul_program{nbits, config_index, context.AdapterInfo().vendor, has_zero_points, has_bias, has_weight_idx, has_weight_idx_indirect};
-  if (context.AdapterInfo().vendor == std::string_view{"intel"}) {
+  SubgroupMatrixMatMulNBitsProgram mul_program{nbits, sg_mat_m, sg_mat_n, sg_mat_k, has_zero_points, has_bias, has_weight_idx, has_weight_idx_indirect, use_intel_shader};
+  if (use_intel_shader) {
     tile_size_a = 64;
     work_group_size = 256;
   }
@@ -259,6 +262,7 @@ bool CanApplySubgroupMatrixMatMulNBits(onnxruntime::webgpu::ComputeContext& cont
                                        uint64_t accuracy_level,
                                        uint32_t block_size,
                                        uint32_t batch_count,
+                                       uint32_t,
                                        uint32_t N,
                                        uint32_t K,
                                        uint32_t nbits,
@@ -269,17 +273,35 @@ bool CanApplySubgroupMatrixMatMulNBits(onnxruntime::webgpu::ComputeContext& cont
     return false;
   }
 
-  bool has_subgroup_matrix = context.HasFeature(wgpu::FeatureName::ChromiumExperimentalSubgroupMatrix);
-  if (has_subgroup_matrix) {
-    if (context.AdapterInfo().vendor == std::string_view{"apple"}) {
-      // For now SubgroupMatrixMatMulNBits is only supported for accuracy level 4, because with Fp16 there are
-      // some precision issues with subgroupMatrixMultiplyAccumulate. It is possible to support higher accuracy
-      // by setting compute_precision to Fp32, but that will be slower. For 1K token prefill FP16 Phi 3.5 is around 5s,
-      // FP32 is around 7s.
-      has_subgroup_matrix = accuracy_level == 4;
-    } else if (context.AdapterInfo().vendor == std::string_view{"intel"}) {
-      // Intel subgroup matrix config is f16-only.
-      has_subgroup_matrix = is_fp16 && IsSubgroupMatrixConfigSupportedOnIntel(context, config_index);
+  if (context.AdapterInfo().vendor == std::string_view{"apple"} && accuracy_level != 4) {
+    // For now SubgroupMatrixMatMulNBits is only supported for accuracy level 4, because with Fp16 there are
+    // some precision issues with subgroupMatrixMultiplyAccumulate. It is possible to support higher accuracy
+    // by setting compute_precision to Fp32, but that will be slower. For 1K token prefill FP16 Phi 3.5 is around 5s,
+    // FP32 is around 7s.
+    return false;
+  }
+
+  bool has_subgroup_matrix = false;
+  if (context.AdapterInfo().vendor == std::string_view{"intel"}) {
+    // Intel subgroup matrix config is f16-only.
+    has_subgroup_matrix = is_fp16 && IsSubgroupMatrixConfigSupportedOnIntel(context, config_index);
+  } else {
+    // Generic path: search the adapter's subgroup matrix configs for the largest suitable config
+    // where M, N, and K are divisible by the config's subgroup matrix dimensions.
+    uint32_t best_tile_size = 0;
+    const auto desired_type = is_fp16 ? wgpu::SubgroupMatrixComponentType::F16
+                                      : wgpu::SubgroupMatrixComponentType::F32;
+    const auto& sgmm_configs = context.SubgroupMatrixConfigs();
+    for (size_t i = 0; i < sgmm_configs.configCount; i++) {
+      const auto& config = sgmm_configs.configs[i];
+      if (config.componentType == desired_type && config.resultComponentType == desired_type && N % config.N == 0 && K % config.K == 0) {
+        uint32_t tile_size = config.M * config.N * config.K;
+        if (tile_size > best_tile_size) {
+          best_tile_size = tile_size;
+          config_index = static_cast<int32_t>(i);
+          has_subgroup_matrix = true;
+        }
+      }
     }
   }
 
