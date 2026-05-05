@@ -1,0 +1,22 @@
+[33mcommit a9b87f102f8e64264f3e61959fb6d2726c1552f2[m
+Author: Ishwar Raut <iraut@nvidia.com>
+Date:   Fri Apr 24 23:11:37 2026 +0530
+
+    Fix missing include for SetRawDataInTensorProto in NV TensorRT RTX tests (#28065)
+    
+    Add #include core/framework/tensorprotoutils.h to
+    test_nv_trt_rtx_ep_util.cc to resolve build error where
+    onnxruntime::utils::SetRawDataInTensorProto was not found.
+    
+    
+    
+    ### Description
+    <!-- Describe your changes. -->
+    
+    
+    
+    ### Motivation and Context
+    <!-- - Why is this change required? What problem does it solve?
+    - If it fixes an open issue, please link to the issue here. -->
+
+onnxruntime/test/providers/nv_tensorrt_rtx/test_nv_trt_rtx_ep_util.cc
