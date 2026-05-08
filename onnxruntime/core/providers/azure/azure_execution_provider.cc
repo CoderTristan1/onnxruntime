@@ -1,7 +1,7 @@
 // Copyright (c) Microsoft Corporation. All rights reserved.
 // Licensed under the MIT License.
 
-#include "core/providers/azure/azure_execution_provider.h"
+#include "azure_execution_provider.h"
 #include "core/graph/constants.h"
 
 namespace onnxruntime {

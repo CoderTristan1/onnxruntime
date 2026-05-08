@@ -7,6 +7,7 @@
 #include "core/common/status.h"
 #include "core/framework/allocator.h"
 #include "core/framework/error_code_helper.h"
+#include "core/memory/memory_events.h"
 #include "core/mlas/inc/mlas.h"
 #include "core/framework/utils.h"
 #include "core/session/ort_apis.h"
