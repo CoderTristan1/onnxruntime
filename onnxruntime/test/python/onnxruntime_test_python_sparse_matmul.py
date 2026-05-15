@@ -35,7 +35,7 @@ class TestSparseToDenseMatmul(unittest.TestCase):
             get_name("sparse_initializer_as_output.onnx"),
             providers=onnxrt.get_available_providers(),
         )
-        res = sess._sess.run_with_ort_values({}, ["values"], RunOptions())
+        res = sess.run_with_ort_values({}, ["values"], RunOptions())
         self.assertIsInstance(res, OrtValueVector)
 
     def test_run_sparse_output_only(self):

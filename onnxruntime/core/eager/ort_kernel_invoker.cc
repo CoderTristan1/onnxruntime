@@ -42,20 +42,28 @@ common::Status ORTInvoker::Invoke(const std::string& op_name,
   std::unordered_map<std::string, OrtValue> initializer_map;
   size_t i = 0;
 
-  for (auto input : inputs) {
+  for (const auto& input : inputs) {
     std::string name = "I" + std::to_string(i++);
+
+    if (!input.IsTensor()) {
+      ORT_THROW("ORTInvoker::Invoke only supports tensor inputs. Got non-tensor input at index", i - 1);
+    }
+
     const Tensor& input_tensor = input.Get<Tensor>();
-    ONNX_NAMESPACE::TypeProto input_tensor_type;
-    input_tensor_type.mutable_tensor_type()->set_elem_type(input_tensor.GetElementType());
-    auto& arg = graph.GetOrCreateNodeArg(name, &input_tensor_type);
-    input_args.push_back(&arg);
-    initializer_map[name] = input;
+
+
   }
 
-  for (i = 0; i < outputs.size(); ++i) {
-    auto& arg = graph.GetOrCreateNodeArg("O" + std::to_string(i), nullptr);
-    output_args.push_back(&arg);
-  }
+const ONNX_NAMESPACE::TypeProto* inferred_out_type = nullptr;
+
+if (!input_args.empty()) {
+    inferred_out_type = input_args[0]->TypeAsProto();
+}
+
+for ( i= 0; i < outputs.size(); ++i) {
+    auto& args = graph.GetOrCreateNodeArg("0" + std::to_string(i), inferred_out_type);
+    output_args.push_back(&args);
+}
 
   auto& node = graph.AddNode("node1", op_name, "eager mode node", input_args, output_args, attributes, domain);
   ORT_RETURN_IF_ERROR(graph.Resolve());
@@ -84,8 +92,16 @@ common::Status ORTInvoker::Invoke(const std::string& op_name,
   }
 
   std::vector<int> fetch_mlvalue_idxs;
+  fetch_mlvalue_idxs.reserve(node.OutputDefs().size());
+
   for (const auto* node_out : node.OutputDefs()) {
-    fetch_mlvalue_idxs.push_back(info.GetMLValueIndex(node_out->Name()));
+    int idx = -1;
+    auto st = info.GetMLValueIndex(node_out->Name(), idx);
+    if (!st.IsOK()) {
+       ORT_THROW("ORTInvoker::Invoke: Failed to resolve MLValue index for output '",
+                 node_out->Name(), "': ", st.ErrorMessage());
+    }
+    fetch_mlvalue_idxs.push_back(idx);
   }
 
   OptimizerExecutionFrame frame(info, fetch_mlvalue_idxs, outputs);
